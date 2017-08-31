@@ -51,6 +51,7 @@ pub mod easy;
 pub mod html;
 #[cfg(feature = "html")]
 mod escape;
+mod errors;
 
 use std::io::Error as IoError;
 #[cfg(all(feature = "yaml-load", feature = "parsing"))]
