@@ -1,4 +1,5 @@
 // see DESIGN.md
+use errors::*;
 use std::collections::HashMap;
 use std::u16;
 use std::sync::Mutex;
@@ -7,8 +8,9 @@ use std::str::FromStr;
 use std::u64;
 use std::cmp::{Ordering, min};
 use std::mem;
+use std::result;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{ser, Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::{Error, Visitor};
 
 /// Multiplier on the power of 2 for MatchPower.
@@ -104,7 +106,7 @@ pub enum BasicScopeStackOp {
     Pop,
 }
 
-fn pack_as_u16s(atoms: &[usize]) -> Result<Scope, ParseScopeError> {
+fn pack_as_u16s(atoms: &[usize]) -> result::Result<Scope, ParseScopeError> {
     let mut res = Scope { a: 0, b: 0 };
 
     for (i, &n) in atoms.iter().enumerate() {
@@ -132,7 +134,7 @@ impl ScopeRepository {
         }
     }
 
-    pub fn build(&mut self, s: &str) -> Result<Scope, ParseScopeError> {
+    pub fn build(&mut self, s: &str) -> result::Result<Scope, ParseScopeError> {
         if s.is_empty() {
             return Ok(Scope { a: 0, b: 0 });
         }
@@ -143,10 +145,12 @@ impl ScopeRepository {
         pack_as_u16s(&parts[..])
     }
 
-    pub fn to_string(&self, scope: Scope) -> String {
+    pub fn to_string(&self, scope: Scope) -> Result<String> {
         let mut s = String::new();
         for i in 0..8 {
-            let atom_number = scope.atom_at(i);
+            let atom_number = scope
+                .atom_at(i)
+                .chain_err(|| format!("Failed to find atom number at index {}.", i))?;
             // println!("atom {} of {:x}-{:x} = {:x}",
             //     i, scope.a, scope.b, atom_number);
             if atom_number == 0 {
@@ -157,7 +161,8 @@ impl ScopeRepository {
             }
             s.push_str(self.atom_str(atom_number));
         }
-        s
+
+        Ok(s)
     }
 
     fn atom_to_index(&mut self, atom: &str) -> usize {
@@ -181,7 +186,7 @@ impl ScopeRepository {
 impl Scope {
     /// Parses a `Scope` from a series of atoms separated by
     /// `.` characters. Example: `Scope::new("meta.rails.controller")`
-    pub fn new(s: &str) -> Result<Scope, ParseScopeError> {
+    pub fn new(s: &str) -> result::Result<Scope, ParseScopeError> {
         let mut repo = SCOPE_REPO.lock().unwrap();
         repo.build(s.trim())
     }
@@ -189,15 +194,16 @@ impl Scope {
     /// Gets the atom number at a given index.
     /// I can't think of any reason you'd find this useful.
     /// It is used internally for turning a scope back into a string.
-    pub fn atom_at(self, index: usize) -> u16 {
+    pub fn atom_at(self, index: usize) -> Result<u16> {
         let shifted = if index < 4 {
             (self.a >> ((3 - index) * 16))
         } else if index < 8 {
             (self.b >> ((7 - index) * 16))
         } else {
-            panic!("atom index out of bounds {:?}", index);
+            Err(ErrorKind::InvalidAtomIndex(index))?
         };
-        (shifted & 0xFFFF) as u16
+
+        Ok((shifted & 0xFFFF) as u16)
     }
 
     #[inline]
@@ -222,7 +228,7 @@ impl Scope {
 
     /// returns a string representation of this scope, this requires locking a
     /// global repo and shouldn't be done frequently.
-    pub fn build_string(self) -> String {
+    pub fn build_string(self) -> Result<String> {
         let repo = SCOPE_REPO.lock().unwrap();
         repo.to_string(self)
     }
@@ -277,34 +283,34 @@ impl Scope {
 impl FromStr for Scope {
     type Err = ParseScopeError;
 
-    fn from_str(s: &str) -> Result<Scope, ParseScopeError> {
+    fn from_str(s: &str) -> result::Result<Scope, ParseScopeError> {
         Scope::new(s)
     }
 }
 
 impl fmt::Display for Scope {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = self.build_string();
+        let s = self.build_string().map_err(|_| fmt::Error)?;
         write!(f, "{}", s)
     }
 }
 
 impl fmt::Debug for Scope {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = self.build_string();
+        let s = self.build_string().map_err(|_| fmt::Error)?;
         write!(f, "<{}>", s)
     }
 }
 
 impl Serialize for Scope {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        let s = self.build_string();
+    fn serialize<S>(&self, serializer: S) -> result::Result<S::Ok, S::Error> where S: Serializer {
+        let s = self.build_string().map_err(|e| ser::Error::custom(format!("{}", e)))?;
         serializer.serialize_str(&s)
     }
 }
 
 impl<'de> Deserialize<'de> for Scope {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+    fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error> where D: Deserializer<'de> {
 
         struct ScopeVisitor;
 
@@ -315,7 +321,7 @@ impl<'de> Deserialize<'de> for Scope {
                 formatter.write_str("a string")
             }
 
-            fn visit_str<E>(self, v: &str) -> Result<Scope, E> where E: Error {
+            fn visit_str<E>(self, v: &str) -> result::Result<Scope, E> where E: Error {
                 Scope::new(v).map_err(|e| Error::custom(format!("Invalid scope: {:?}", e)))
             }
         }
@@ -390,7 +396,7 @@ impl ScopeStack {
             ScopeStackOp::Clear(amount) => {
                 let cleared = match amount {
                     ClearAmount::TopN(n) => {
-                        // don't try to clear more scopes than are on the stack 
+                        // don't try to clear more scopes than are on the stack
                         let to_leave = self.scopes.len() - min(n, self.scopes.len());
                         self.scopes.split_off(to_leave)
                     }
@@ -423,11 +429,16 @@ impl ScopeStack {
 
     /// Prints out each scope in the stack separated by spaces
     /// and then a newline. Top of the stack at the end.
-    pub fn debug_print(&self, repo: &ScopeRepository) {
+    pub fn debug_print(&self, repo: &ScopeRepository) -> Result<()> {
         for s in &self.scopes {
-            print!("{} ", repo.to_string(*s));
+            let repo_string = repo
+                .to_string(*s)
+                .chain_err(|| "Failed to convert scope repository to string")?;
+            print!("{} ", repo_string);
         }
         println!("");
+
+        Ok(())
     }
 
     /// Return the bottom n elements of the stack.
@@ -497,7 +508,7 @@ impl FromStr for ScopeStack {
     type Err = ParseScopeError;
 
     /// Parses a scope stack from a whitespace separated list of scopes.
-    fn from_str(s: &str) -> Result<ScopeStack, ParseScopeError> {
+    fn from_str(s: &str) -> result::Result<ScopeStack, ParseScopeError> {
         let mut scopes = Vec::new();
         for name in s.split_whitespace() {
             scopes.push(try!(Scope::from_str(name)))

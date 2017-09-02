@@ -19,17 +19,21 @@ pub enum ClassStyle {
     Spaced,
 }
 
-fn scope_to_classes(s: &mut String, scope: Scope, style: ClassStyle) {
+fn scope_to_classes(s: &mut String, scope: Scope, style: ClassStyle) -> Result<()> {
     assert!(style == ClassStyle::Spaced); // TODO more styles
     let repo = SCOPE_REPO.lock().unwrap();
     for i in 0..(scope.len()) {
-        let atom = scope.atom_at(i as usize);
+        let atom = scope
+            .atom_at(i as usize)
+            .chain_err(|| format!("Failed to find an atom at index {} for scope {}", i, scope))?;
         let atom_s = repo.atom_str(atom);
         if i != 0 {
             s.push_str(" ")
         }
         s.push_str(atom_s);
     }
+
+    Ok(())
 }
 
 /// Convenience method that combines `start_coloured_html_snippet`, `styles_to_coloured_html`
@@ -103,7 +107,7 @@ pub fn highlighted_snippet_for_file<P: AsRef<Path>>(path: P,
 pub fn tokens_to_classed_html(line: &str,
                               ops: &[(usize, ScopeStackOp)],
                               style: ClassStyle)
-                              -> String {
+                              -> Result<String> {
     let mut s = String::with_capacity(line.len() + ops.len() * 8); // a guess
     let mut cur_index = 0;
     let mut stack = ScopeStack::new();
@@ -125,7 +129,8 @@ pub fn tokens_to_classed_html(line: &str,
             }
         });
     }
-    s
+
+    Ok(s)
 }
 
 /// Determines how background colour attributes are generated
