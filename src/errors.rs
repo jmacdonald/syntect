@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 error_chain! {
     errors {
         UnlinkedContextReference(reference: String) {

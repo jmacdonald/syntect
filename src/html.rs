@@ -5,7 +5,7 @@ use parsing::{ScopeStackOp, BasicScopeStackOp, Scope, ScopeStack, SyntaxDefiniti
 use easy::{HighlightLines, HighlightFile};
 use highlighting::{self, Style, Theme, Color};
 use escape::Escape;
-use std::io::{self, BufRead};
+use std::io::BufRead;
 use std::path::Path;
 
 /// Only one style for now, I may add more class styles later.
