@@ -3,6 +3,7 @@
 //! integrated cases like text editors and I have no idea what kind of monkeying
 //! you might want to do with the data. Perhaps parsing your own syntax format
 //! into this data structure?
+use errors;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use onig::{self, Regex, Region, Syntax};
@@ -10,7 +11,7 @@ use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 use super::scope::*;
 use regex_syntax::escape;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{ser, de, Deserialize, Deserializer, Serialize, Serializer};
 
 pub type CaptureMapping = Vec<(usize, Vec<Scope>)>;
 pub type ContextPtr = Rc<RefCell<Context>>;
@@ -261,14 +262,14 @@ impl PartialEq for LinkerLink {
 /// Just panics, we can't do anything with linked up syntaxes
 impl Serialize for LinkerLink {
     fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        panic!("Can't serialize syntax definitions which have been linked");
+        Err(ser::Error::custom("The serialize operation is unsupported for LinkerLink"))
     }
 }
 
 /// Just panics, we can't do anything with linked up syntaxes
 impl<'de> Deserialize<'de> for LinkerLink {
     fn deserialize<D>(_: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
-        panic!("No linked syntax should ever have gotten serialized");
+        Err(de::Error::custom("The deserialize operation is unsupported for LinkerLink"))
     }
 }
 
