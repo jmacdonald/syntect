@@ -1,3 +1,4 @@
+use errors::*;
 use super::syntax_definition::*;
 use super::scope::*;
 use onig::{self, Region};
@@ -73,7 +74,7 @@ impl ParseState {
     ///
     /// The vector is in order both by index to apply at (the `usize`) and also by order to apply them at a
     /// given index (e.g popping old scopes before pusing new scopes).
-    pub fn parse_line(&mut self, line: &str) -> Vec<(usize, ScopeStackOp)> {
+    pub fn parse_line(&mut self, line: &str) -> Result<Vec<(usize, ScopeStackOp)>> {
         assert!(self.stack.len() > 0,
                 "Somehow main context was popped from the stack");
         let mut match_start = 0;
@@ -101,7 +102,7 @@ impl ParseState {
                                     &mut search_cache,
                                     &mut matched,
                                     &mut regions,
-                                    &mut res) {
+                                    &mut res).chain_err(|| "Failed to parse the next token")? {
             // We only care about not repeatedly matching things at the same location
             if match_start != prev_match_start {
                 matched.clear();
@@ -109,7 +110,7 @@ impl ParseState {
             prev_match_start = match_start;
         }
 
-        res
+        Ok(res)
     }
 
     fn parse_next_token(&mut self,
@@ -119,7 +120,7 @@ impl ParseState {
                         matched: &mut MatchedPatterns,
                         regions: &mut Region,
                         ops: &mut Vec<(usize, ScopeStackOp)>)
-                        -> bool {
+                        -> Result<bool> {
         let cur_match = {
             let cur_level = &self.stack[self.stack.len() - 1];
             let mut min_start = usize::MAX;
@@ -138,7 +139,11 @@ impl ParseState {
             for ctx in context_chain {
                 for (pat_context_ptr, pat_index) in context_iter(ctx) {
                     let mut pat_context = pat_context_ptr.borrow_mut();
-                    let mut match_pat = pat_context.match_at_mut(pat_index);
+                    let mut match_pat = pat_context
+                        .match_at_mut(pat_index)
+                        .chain_err(|| format!(
+                            "Couldn't find a match pattern at index {}", pat_index
+                        ))?;
                     // println!("{} - {:?} - {:?}", match_pat.regex_str, match_pat.has_captures, cur_level.captures.is_some());
                     let match_ptr = match_pat as *const MatchPattern;
 
@@ -217,10 +222,10 @@ impl ParseState {
             let (_, match_end) = reg_match.regions.pos(0).unwrap();
             *start = match_end;
             let level_context = self.stack[self.stack.len() - 1].context.clone();
-            self.exec_pattern(line, reg_match, level_context, matched, ops);
-            true
+            self.exec_pattern(line, reg_match, level_context, matched, ops)?;
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -231,10 +236,14 @@ impl ParseState {
                     level_context_ptr: ContextPtr,
                     matched: &mut MatchedPatterns,
                     ops: &mut Vec<(usize, ScopeStackOp)>)
-                    -> bool {
+                    -> Result<bool> {
         let (match_start, match_end) = reg_match.regions.pos(0).unwrap();
         let context = reg_match.context.borrow();
-        let pat = context.match_at(reg_match.pat_index);
+        let pat = context
+            .match_at(reg_match.pat_index)
+            .chain_err(|| format!(
+                "Couldn't find a match pattern at index {}", reg_match.pat_index
+            ))?;
         let level_context = level_context_ptr.borrow();
         // println!("running pattern {:?} on '{}' at {}", pat.regex_str, line, match_start);
 
@@ -248,7 +257,7 @@ impl ParseState {
             MatchOperation::Pop | MatchOperation:: None => ()
         };
 
-        self.push_meta_ops(true, match_start, &*level_context, &pat.operation, ops);
+        self.push_meta_ops(true, match_start, &*level_context, &pat.operation, ops)?;
         for s in &pat.scope {
             // println!("pushing {:?} at {}", s, match_start);
             ops.push((match_start, ScopeStackOp::Push(*s)));
@@ -281,7 +290,7 @@ impl ParseState {
             // println!("popping at {}", match_end);
             ops.push((match_end, ScopeStackOp::Pop(pat.scope.len())));
         }
-        self.push_meta_ops(false, match_end, &*level_context, &pat.operation, ops);
+        self.push_meta_ops(false, match_end, &*level_context, &pat.operation, ops)?;
 
         self.perform_op(line, &reg_match.regions, pat)
     }
@@ -291,7 +300,7 @@ impl ParseState {
                      index: usize,
                      cur_context: &Context,
                      match_op: &MatchOperation,
-                     ops: &mut Vec<(usize, ScopeStackOp)>) {
+                     ops: &mut Vec<(usize, ScopeStackOp)>) -> Result<()> {
         // println!("metas ops for {:?}, initial: {}",
         //          match_op,
         //          initial);
@@ -326,7 +335,7 @@ impl ParseState {
                 if initial {
                     // add each context's meta scope
                     for r in context_refs.iter() {
-                        let ctx_ptr = r.resolve();
+                        let ctx_ptr = r.resolve().chain_err(|| "Couldn't get a pointer to the referenced context")?;
                         let ctx = ctx_ptr.borrow();
 
                         if !is_set {
@@ -341,15 +350,18 @@ impl ParseState {
                     }
                 } else {
                     let repush = (is_set && (!cur_context.meta_scope.is_empty() || !cur_context.meta_content_scope.is_empty())) || context_refs.iter().any(|r| {
-                        let ctx_ptr = r.resolve();
-                        let ctx = ctx_ptr.borrow();
+                        if let Ok(ctx_ptr) = r.resolve() {
+                            let ctx = ctx_ptr.borrow();
 
-                        !ctx.meta_content_scope.is_empty() || (ctx.clear_scopes.is_some() && is_set)
+                            !ctx.meta_content_scope.is_empty() || (ctx.clear_scopes.is_some() && is_set)
+                        } else {
+                            false
+                        }
                     });
                     if repush {
                         // remove previously pushed meta scopes, so that meta content scopes will be applied in the correct order
                         let mut num_to_pop : usize = context_refs.iter().map(|r| {
-                            let ctx_ptr = r.resolve();
+                            let ctx_ptr = r.resolve().unwrap();
                             let ctx = ctx_ptr.borrow();
                             ctx.meta_scope.len()
                         }).sum();
@@ -366,7 +378,7 @@ impl ParseState {
 
                         // now we push meta scope and meta context scope for each context pushed
                         for r in context_refs {
-                            let ctx_ptr = r.resolve();
+                            let ctx_ptr = r.resolve().chain_err(|| "Couldn't get a pointer to the referenced context")?;
                             let ctx = ctx_ptr.borrow();
 
                             // for some reason, contrary to my reading of the docs, set does this after the token
@@ -388,10 +400,12 @@ impl ParseState {
             },
             MatchOperation::None => (),
         }
+
+        Ok(())
     }
 
     /// Returns true if the stack was changed
-    fn perform_op(&mut self, line: &str, regions: &Region, pat: &MatchPattern) -> bool {
+    fn perform_op(&mut self, line: &str, regions: &Region, pat: &MatchPattern) -> Result<bool> {
         let ctx_refs = match pat.operation {
             MatchOperation::Push(ref ctx_refs) => ctx_refs,
             MatchOperation::Set(ref ctx_refs) => {
@@ -400,9 +414,9 @@ impl ParseState {
             }
             MatchOperation::Pop => {
                 self.stack.pop();
-                return true;
+                return Ok(true);
             }
-            MatchOperation::None => return false,
+            MatchOperation::None => return Ok(false),
         };
         for (i, r) in ctx_refs.iter().enumerate() {
             let proto = if i == 0 {
@@ -410,7 +424,7 @@ impl ParseState {
             } else {
                 None
             };
-            let ctx_ptr = r.resolve();
+            let ctx_ptr = r.resolve().chain_err(|| "Couldn't get a pointer to the referenced context")?;
             let captures = {
                 let ctx = ctx_ptr.borrow();
                 if ctx.uses_backrefs {
@@ -425,7 +439,7 @@ impl ParseState {
                 captures: captures,
             });
         }
-        true
+        Ok(true)
     }
 }
 

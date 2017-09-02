@@ -2,6 +2,7 @@
 //! files without caring about intermediate semantic representation
 //! and caching.
 
+use errors::*;
 use parsing::{ScopeStack, ParseState, SyntaxDefinition, SyntaxSet, ScopeStackOp};
 use highlighting::{Highlighter, HighlightState, HighlightIterator, Theme, Style};
 use std::io::{self, BufReader};
@@ -55,14 +56,15 @@ impl<'a> HighlightLines<'a> {
     }
 
     /// Highlights a line of a file
-    pub fn highlight<'b>(&mut self, line: &'b str) -> Vec<(Style, &'b str)> {
+    pub fn highlight<'b>(&mut self, line: &'b str) -> Result<Vec<(Style, &'b str)>> {
         // println!("{}", self.highlight_state.path);
-        let ops = self.parse_state.parse_line(line);
+        let ops = self.parse_state.parse_line(line)?;
         // use util::debug_print_ops;
         // debug_print_ops(line, &ops);
         let iter =
             HighlightIterator::new(&mut self.highlight_state, &ops[..], line, &self.highlighter);
-        iter.collect()
+
+        Ok(iter.collect())
     }
 }
 

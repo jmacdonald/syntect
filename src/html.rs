@@ -1,4 +1,5 @@
 //! Rendering highlighted code as HTML+CSS
+use errors::*;
 use std::fmt::Write;
 use parsing::{ScopeStackOp, BasicScopeStackOp, Scope, ScopeStack, SyntaxDefinition, SyntaxSet, SCOPE_REPO};
 use easy::{HighlightLines, HighlightFile};
@@ -38,7 +39,7 @@ fn scope_to_classes(s: &mut String, scope: Scope, style: ClassStyle) {
 /// Note that the `syntax` passed in must be from a `SyntaxSet` compiled for no newline characters.
 /// This is easy to get with `SyntaxSet::load_defaults_nonewlines()`. If you think this is the wrong
 /// choice of `SyntaxSet` to accept, I'm not sure of it either, email me.
-pub fn highlighted_snippet_for_string(s: &str, syntax: &SyntaxDefinition, theme: &Theme) -> String {
+pub fn highlighted_snippet_for_string(s: &str, syntax: &SyntaxDefinition, theme: &Theme) -> Result<String> {
     let mut output = String::new();
     let mut highlighter = HighlightLines::new(syntax, theme);
     let c = theme.settings.background.unwrap_or(highlighting::WHITE);
@@ -49,13 +50,14 @@ pub fn highlighted_snippet_for_string(s: &str, syntax: &SyntaxDefinition, theme:
            c.b)
         .unwrap();
     for line in s.lines() {
-        let regions = highlighter.highlight(line);
+        let regions = highlighter.highlight(line)?;
         let html = styles_to_coloured_html(&regions[..], IncludeBackground::IfDifferent(c));
         output.push_str(&html);
         output.push('\n');
     }
     output.push_str("</pre>\n");
-    output
+
+    Ok(output)
 }
 
 /// Convenience method that combines `start_coloured_html_snippet`, `styles_to_coloured_html`
@@ -68,7 +70,7 @@ pub fn highlighted_snippet_for_string(s: &str, syntax: &SyntaxDefinition, theme:
 pub fn highlighted_snippet_for_file<P: AsRef<Path>>(path: P,
                                                     ss: &SyntaxSet,
                                                     theme: &Theme)
-                                                    -> io::Result<String> {
+                                                    -> Result<String> {
     // TODO reduce code duplication with highlighted_snippet_for_string
     let mut output = String::new();
     let mut highlighter = try!(HighlightFile::new(path, ss, theme));
@@ -81,7 +83,7 @@ pub fn highlighted_snippet_for_file<P: AsRef<Path>>(path: P,
         .unwrap();
     for maybe_line in highlighter.reader.lines() {
         let line = try!(maybe_line);
-        let regions = highlighter.highlight_lines.highlight(&line);
+        let regions = highlighter.highlight_lines.highlight(&line)?;
         let html = styles_to_coloured_html(&regions[..], IncludeBackground::IfDifferent(c));
         output.push_str(&html);
         output.push('\n');

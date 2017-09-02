@@ -19,4 +19,8 @@ error_chain! {
             display("The scope stack could not be restored as the cleared scope stack is empty")
         }
     }
+
+    foreign_links {
+        Io(::std::io::Error);
+    }
 }
