@@ -166,30 +166,29 @@ pub fn context_iter(ctx: ContextPtr) -> MatchIter {
 }
 
 impl Context {
-    /// Returns the match pattern at an index, panics if the thing isn't a match pattern
-    pub fn match_at(&self, index: usize) -> &MatchPattern {
+    /// Returns the match pattern at an index
+    pub fn match_at(&self, index: usize) -> errors::Result<&MatchPattern> {
         match self.patterns[index] {
-            Pattern::Match(ref match_pat) => match_pat,
-            _ => panic!("bad index to match_at"),
+            Pattern::Match(ref match_pat) => Ok(match_pat),
+            _ => Err(errors::ErrorKind::InvalidMatchPatternIndex(index))?
         }
     }
 
     /// Returns a mutable reference, otherwise like `match_at`
-    pub fn match_at_mut(&mut self, index: usize) -> &mut MatchPattern {
+    pub fn match_at_mut(&mut self, index: usize) -> errors::Result<&mut MatchPattern> {
         match self.patterns[index] {
-            Pattern::Match(ref mut match_pat) => match_pat,
-            _ => panic!("bad index to match_at"),
+            Pattern::Match(ref mut match_pat) => Ok(match_pat),
+            _ => Err(errors::ErrorKind::InvalidMatchPatternIndex(index))?
         }
     }
 }
 
 impl ContextReference {
-    /// find the pointed to context, panics if ref is not linked
-    pub fn resolve(&self) -> ContextPtr {
+    pub fn resolve(&self) -> errors::Result<ContextPtr> {
         match *self {
-            ContextReference::Inline(ref ptr) => ptr.clone(),
-            ContextReference::Direct(ref ptr) => ptr.link.upgrade().unwrap(),
-            _ => panic!("Can only call resolve on linked references: {:?}", self),
+            ContextReference::Inline(ref ptr) => Ok(ptr.clone()),
+            ContextReference::Direct(ref ptr) => Ok(ptr.link.upgrade().unwrap()),
+            _ => Err(errors::ErrorKind::UnlinkedContextReference(format!("{:?}", self)))?
         }
     }
 }
@@ -259,14 +258,12 @@ impl PartialEq for LinkerLink {
 }
 
 
-/// Just panics, we can't do anything with linked up syntaxes
 impl Serialize for LinkerLink {
     fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error> where S: Serializer {
         Err(ser::Error::custom("The serialize operation is unsupported for LinkerLink"))
     }
 }
 
-/// Just panics, we can't do anything with linked up syntaxes
 impl<'de> Deserialize<'de> for LinkerLink {
     fn deserialize<D>(_: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
         Err(de::Error::custom("The deserialize operation is unsupported for LinkerLink"))
